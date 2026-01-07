@@ -1,0 +1,361 @@
+Below is a concrete end-to-end sample MVP flow (e-commerce example) showing sample inputs and outputs at each step: chat → element labeling → generated taxonomy/rules bundle → PostHog deployments (Actions + Transformations) → sample captured events before/after → sample query request/response.
+
+Scenario
+
+Customer: “Handmade marketplace” (buyers + sellers)
+Goal: Clean analytics for funnel: product view → add to cart → checkout → purchase
+Constraint: Remove PII (email/phone), normalize product identifiers, suppress noisy autocapture.
+
+Step 1 — Setup chat (input → output)
+Input (Admin → BetterHeap extension chat)
+
+Transcript (snippet)
+
+Admin: “We’re a marketplace for handmade goods.”
+
+Admin: “Key actions: product views, add to cart, start checkout, purchase.”
+
+Admin: “We have two user types: buyers and sellers.”
+
+Admin: “We care about conversion rate and top products.”
+
+Output (extension creates a “setup session” payload to your Setup API)
+
+POST POST /bh/v1/setup_sessions (your API)
+Body (example)
+
+project_id: "bh_proj_92a1"
+
+posthog_project_id: 14721
+
+product_type: "marketplace_ecommerce"
+
+user_types: ["buyer", "seller"]
+
+goals: ["conversion_rate", "top_products", "checkout_dropoff"]
+
+transcript: [ ... messages ... ]
+
+Response
+
+setup_session_id: "ssn_5f3c"
+
+status: "collecting_labels"
+
+Step 2 — Element labeling (input → output)
+
+Admin turns on “label mode” and clicks on elements in the web app.
+
+Input (Extension → Setup API): labeled elements
+
+POST POST /bh/v1/setup_sessions/ssn_5f3c/labels
+
+Body (example)
+
+{
+  "labels": [
+    {
+      "label_id": "lbl_001",
+      "intent": "added_to_cart",
+      "page_url_sample": "https://shop.example.com/products/ceramic-mug-123",
+      "css_selector": "button[data-test='add-to-cart']",
+      "text_sample": "Add to cart",
+      "expected_properties": {
+        "product_id_source": "data attribute: data-product-id",
+        "quantity_source": "cart state"
+      }
+    },
+    {
+      "label_id": "lbl_002",
+      "intent": "checkout_started",
+      "page_url_sample": "https://shop.example.com/cart",
+      "css_selector": "a[href='/checkout']",
+      "text_sample": "Checkout"
+    },
+    {
+      "label_id": "lbl_003",
+      "intent": "purchase_completed",
+      "page_url_sample": "https://shop.example.com/order/thank-you",
+      "css_selector": "body",
+      "text_sample": "Thank you for your order"
+    }
+  ]
+}
+
+Output (Setup API stores it; returns current completeness)
+{
+  "setup_session_id": "ssn_5f3c",
+  "labels_received": 3,
+  "next_needed": ["product_viewed definition", "user_type identification rule"]
+}
+
+Step 3 — AI generates a “Rules Bundle” (input → output)
+Input (Setup API → Structuring Agent)
+
+transcript + labels + template = marketplace_ecommerce
+
+Output (Rules Bundle v1)
+
+Your agent returns a structured plan (stored in your config DB).
+
+Response (example, shortened but realistic)
+
+{
+  "taxonomy_version": "tax_v1",
+  "canonical_events": [
+    {
+      "name": "product_viewed",
+      "description": "User viewed a product detail page",
+      "required_properties": {"product_id": "string"},
+      "optional_properties": {"category": "string", "price": "number"}
+    },
+    {
+      "name": "added_to_cart",
+      "description": "User added a product to cart",
+      "required_properties": {"product_id": "string"},
+      "optional_properties": {"quantity": "number"}
+    },
+    {
+      "name": "checkout_started",
+      "required_properties": {},
+      "optional_properties": {"cart_value": "number"}
+    },
+    {
+      "name": "purchase_completed",
+      "required_properties": {"order_id": "string"},
+      "optional_properties": {"revenue": "number", "currency": "string"}
+    }
+  ],
+  "normalization_rules": [
+    {
+      "rule_id": "nr_01",
+      "description": "Normalize product identifier keys",
+      "map": {
+        "productId": "product_id",
+        "sku": "product_id",
+        "data-product-id": "product_id"
+      }
+    }
+  ],
+  "pii_rules": [
+    {
+      "rule_id": "pii_01",
+      "drop_properties": ["email", "phone", "full_name"]
+    }
+  ],
+  "noise_rules": [
+    {
+      "rule_id": "nz_01",
+      "drop_events": ["$autocapture"],
+      "allow_if": {"selector_in_allowlist": ["lbl_001", "lbl_002", "lbl_003"]}
+    }
+  ],
+  "posthog_actions_plan": [
+    {
+      "action_name": "Added to Cart (canonical)",
+      "matches": [
+        {
+          "event": "$autocapture",
+          "selector": "button[data-test='add-to-cart']",
+          "url_contains": "/products/"
+        }
+      ],
+      "emit_canonical_event": "added_to_cart"
+    },
+    {
+      "action_name": "Checkout Started (canonical)",
+      "matches": [
+        {"event": "$pageview", "url_contains": "/checkout"}
+      ],
+      "emit_canonical_event": "checkout_started"
+    }
+  ],
+  "transformations_plan": [
+    {
+      "name": "BH Tax v1 - Drop PII",
+      "when": "all events",
+      "do": "remove properties email, phone, full_name"
+    },
+    {
+      "name": "BH Tax v1 - Normalize product_id",
+      "when": "events containing productId or sku or data-product-id",
+      "do": "set product_id; delete original keys"
+    },
+    {
+      "name": "BH Tax v1 - Suppress noisy autocapture",
+      "when": "event == $autocapture",
+      "do": "drop unless selector is allowlisted"
+    }
+  ]
+}
+
+Step 4 — Admin preview & approval (input → output)
+Output (Setup API → Extension): human-readable preview
+
+“We will create 4 canonical events”
+
+“We will remove 3 PII fields”
+
+“We will drop ~90% of noisy $autocapture, keeping only labeled interactions”
+
+“We will normalize product_id”
+
+Input (Admin → Extension)
+
+Approve: “Yes, deploy.”
+
+Output (Extension → Setup API)
+
+POST /bh/v1/taxonomies/tax_v1/approve
+Response: {"status":"approved"}
+
+Step 5 — Deployment to PostHog (sample inputs/outputs)
+
+You deploy in two places:
+
+A) Create PostHog Actions (optional but helpful)
+
+POST <ph_host>/api/projects/14721/actions/
+Body (conceptual example)
+
+name: “Added to Cart (canonical)”
+
+steps: match $autocapture with selector + URL constraints
+
+(In MVP, you can use Actions as the clean measurement surface, even before you emit canonical events.)
+
+Response (example)
+
+{
+  "id": 981,
+  "name": "Added to Cart (canonical)",
+  "created_at": "2026-01-06T10:12:11Z"
+}
+
+B) Create transformations (Hog Functions)
+
+POST <ph_host>/api/projects/14721/hog_functions/
+Create three transformations corresponding to the plan.
+
+Response (example)
+
+{
+  "created": [
+    {"id": "hf_201", "name": "BH Tax v1 - Drop PII", "enabled": false},
+    {"id": "hf_202", "name": "BH Tax v1 - Normalize product_id", "enabled": false},
+    {"id": "hf_203", "name": "BH Tax v1 - Suppress noisy autocapture", "enabled": false}
+  ]
+}
+
+
+Then you enable them after validation:
+
+PATCH <ph_host>/api/projects/14721/hog_functions/hf_201/ with enabled=true
+(repeat for hf_202, hf_203)
+
+Step 6 — What raw events look like (before) vs clean events (after)
+Raw events arriving (before transformations)
+
+Autocapture click on “Add to cart”
+
+{
+  "event": "$autocapture",
+  "distinct_id": "anon_77",
+  "timestamp": "2026-01-06T10:20:01Z",
+  "properties": {
+    "$current_url": "https://shop.example.com/products/ceramic-mug-123",
+    "$element_type": "button",
+    "$element_content": "Add to cart",
+    "$elements": ["button[data-test='add-to-cart']"],
+    "productId": "ceramic-mug-123",
+    "email": "alice@example.com"
+  }
+}
+
+
+Page view of checkout
+
+{
+  "event": "$pageview",
+  "distinct_id": "anon_77",
+  "timestamp": "2026-01-06T10:22:10Z",
+  "properties": {
+    "$current_url": "https://shop.example.com/checkout",
+    "cartValue": 54.0,
+    "currency": "USD"
+  }
+}
+
+Cleaned result in analytics store (after transformations)
+
+If you drop noisy autocapture except allowlisted selectors, this click remains.
+
+PII is removed.
+
+product id key normalized.
+
+{
+  "event": "$autocapture",
+  "distinct_id": "anon_77",
+  "timestamp": "2026-01-06T10:20:01Z",
+  "properties": {
+    "$current_url": "https://shop.example.com/products/ceramic-mug-123",
+    "$elements": ["button[data-test='add-to-cart']"],
+    "product_id": "ceramic-mug-123"
+  }
+}
+
+
+Then your clean measurement layer can be either:
+
+Using Actions: “Added to Cart (canonical)” fires when you analyze
+or
+
+Optional advanced MVP: you transform/emit a new canonical event name (added_to_cart) from the ingestion pipeline (depends on how aggressively you want to rewrite; many MVPs start with Actions first).
+
+Step 7 — Sample Analytics Chat query (input → output)
+Input (User)
+
+“What’s our checkout conversion rate today?”
+
+QueryAgent internal resolution (conceptual)
+
+Define:
+
+numerator = purchase_completed
+
+denominator = checkout_started
+
+Today = 2026-01-06 (customer timezone rules apply)
+
+Output 1: PostHog Query API request (conceptual)
+
+POST <ph_host>/api/projects/14721/query/
+Body includes a HogQLQuery with two counts and a ratio by day.
+
+Output 2: Query API response (example)
+{
+  "results": [
+    {"date": "2026-01-06", "checkout_started": 420, "purchase_completed": 84, "conversion_rate": 0.2}
+  ]
+}
+
+Output 3: BetterHeap response to user (what you show)
+
+“Checkout conversion rate today (Jan 6, 2026): 20.0% (84 / 420)”
+
+Chart: time series (optional)
+
+Link: “Open in PostHog insight” (optional)
+
+Summary of the sample flow (what you proved in MVP)
+
+Admin can describe goals and label UI elements.
+
+AI produces a coherent taxonomy and a deployable hygiene plan.
+
+PostHog receives events, transformations enforce hygiene (PII removal, normalization, noise suppression).
+
+Your chat layer can query and return business metrics immediately.
+
+If you want, I can provide a second sample where the site is already emitting a mix of explicit events and autocapture, and show how the rules bundle handles duplicates and naming conflicts (the most common real-world failure mode).

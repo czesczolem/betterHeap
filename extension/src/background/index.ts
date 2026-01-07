@@ -19,5 +19,3 @@ chrome.runtime.onMessage.addListener((message) => {
   
   return true
 })
-
-export {}
