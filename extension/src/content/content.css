@@ -1,0 +1,10 @@
+/* Content script styles */
+.bh-highlight {
+  outline: 2px solid #3b82f6 !important;
+  outline-offset: 2px !important;
+  background-color: rgba(59, 130, 246, 0.1) !important;
+}
+
+.bh-cursor-crosshair * {
+  cursor: crosshair !important;
+}
