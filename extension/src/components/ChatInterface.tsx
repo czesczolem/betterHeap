@@ -82,14 +82,28 @@ export function ChatInterface({ onStartLabeling }: ChatInterfaceProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center gap-2 p-4 border-b bg-gradient-to-r from-primary/5 to-primary/10">
-        <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10">
-          <Sparkles className="w-4 h-4 text-primary" />
+      <div className="flex items-center justify-between p-4 border-b bg-gradient-to-r from-primary/5 to-primary/10">
+        <div className="flex items-center gap-2">
+          <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10">
+            <Sparkles className="w-4 h-4 text-primary" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold">BetterHeap Setup</h2>
+            <p className="text-xs text-muted-foreground">AI-guided analytics</p>
+          </div>
         </div>
-        <div>
-          <h2 className="text-sm font-semibold">BetterHeap Setup</h2>
-          <p className="text-xs text-muted-foreground">AI-guided analytics</p>
-        </div>
+        <button
+          onClick={() => {
+            if (confirm('Reset and start over?')) {
+              chrome.storage.local.clear()
+              window.location.reload()
+            }
+          }}
+          className="text-xs text-muted-foreground hover:text-foreground"
+          title="Reset"
+        >
+          ↻
+        </button>
       </div>
 
       {/* Messages */}

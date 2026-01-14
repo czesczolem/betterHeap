@@ -81,9 +81,20 @@ function App() {
           <p className="text-sm text-muted-foreground mb-4">
             We've labeled {labeledElements.length} elements and are generating your analytics taxonomy.
           </p>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-muted-foreground mb-4">
             You'll receive a confirmation once your setup is ready.
           </p>
+          <button
+            onClick={() => {
+              // Clear all state
+              chrome.storage.local.clear()
+              setMode('chat')
+              setLabeledElements([])
+            }}
+            className="text-xs text-muted-foreground hover:text-foreground underline"
+          >
+            Start Over
+          </button>
         </div>
       )}
     </div>
